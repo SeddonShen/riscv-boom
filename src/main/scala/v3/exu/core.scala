@@ -45,6 +45,7 @@ import boom.v3.ifu.{GlobalHistory, HasBoomFrontendParameters}
 import boom.v3.exu.FUConstants._
 import boom.v3.util._
 
+import difftest._
 /**
  * Top level core object that connects the Frontend to the rest of the pipeline.
  */
@@ -1339,35 +1340,64 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //-------------------------------------------------------------
   //-------------------------------------------------------------
 
+  if (true) {
+    val difftest = DifftestModule(new DiffCSRState, delay = 0, dontCare = true)
+    difftest := csr.io.difftest
+  }
 
-  if (COMMIT_LOG_PRINTF) {
+if (true) {
+    val difftest = DifftestModule(new DiffArchIntRegState)
+    difftest.coreid := 0.U
+    // 添加寄存器数组来保存所有寄存器的值
+    val int_regfile_state = RegInit(VecInit(Seq.fill(32)(0.U(xLen.W))))
+    // 获取32个整数逻辑寄存器的值
+    for (i <- 0 until 32) {
+      // 检查当前提交的指令是否写入该逻辑寄存器
+      for (w <- 0 until coreWidth) {
+        when (rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).dst_rtype === RT_FIX && rob.io.commit.uops(w).ldst === i.U) {
+          int_regfile_state(i) := rob.io.commit.debug_wdata(w)
+          printf("[core index:%d] x%d <- 0x%x\n", w.U, i.U, rob.io.commit.debug_wdata(w))
+        }
+      }
+      // x0永远为0，其他寄存器使用保存的值
+      difftest.value(i) := Mux(i.U === 0.U, 0.U, int_regfile_state(i))
+    }
+}
+
+  if (true) {
     var new_commit_cnt = 0.U
-
+    for (w <- 0 until coreWidth){
+      val difftest = DifftestModule(new DiffInstrCommit, delay = 1, dontCare = true)
+      difftest.coreid := 0.U
+      difftest.index  := w.U
+      difftest.valid  := rob.io.commit.arch_valids(w)
+      difftest.pc     := rob.io.commit.uops(w).debug_pc
+      difftest.instr  := rob.io.commit.uops(w).debug_inst
+      difftest.skip   := 0.U // TBD...
+      difftest.isRVC  := rob.io.commit.uops(w).is_rvc
+      difftest.rfwen  := rob.io.commit.uops(w).rf_wen
+      // difftest.wdest  := TBD...
+      // difftest.wpdest := TBD...
+    }
     for (w <- 0 until coreWidth) {
       val priv = RegNext(csr.io.status.prv) // erets change the privilege. Get the old one
 
       // To allow for diffs against spike :/
       def printf_inst(uop: MicroOp) = {
         when (uop.is_rvc) {
-          printf("(0x%x)", uop.debug_inst(15,0))
+          printf("([INST]=0x%x)", uop.debug_inst(15,0))
         } .otherwise {
-          printf("(0x%x)", uop.debug_inst)
+          printf("([INST]=0x%x)", uop.debug_inst)
         }
       }
 
       when (rob.io.commit.arch_valids(w)) {
-        printf("%d 0x%x ",
-          priv,
-          Sext(rob.io.commit.uops(w).debug_pc(vaddrBits-1,0), xLen))
+        printf("%d 0x%x ", priv, Sext(rob.io.commit.uops(w).debug_pc(vaddrBits-1,0), xLen))
         printf_inst(rob.io.commit.uops(w))
         when (rob.io.commit.uops(w).dst_rtype === RT_FIX && rob.io.commit.uops(w).ldst =/= 0.U) {
-          printf(" x%d 0x%x\n",
-            rob.io.commit.uops(w).ldst,
-            rob.io.commit.debug_wdata(w))
+          printf(" x%d 0x%x\n", rob.io.commit.uops(w).ldst, rob.io.commit.debug_wdata(w))
         } .elsewhen (rob.io.commit.uops(w).dst_rtype === RT_FLT) {
-          printf(" f%d 0x%x\n",
-            rob.io.commit.uops(w).ldst,
-            rob.io.commit.debug_wdata(w))
+          printf(" f%d 0x%x\n", rob.io.commit.uops(w).ldst, rob.io.commit.debug_wdata(w))
         } .otherwise {
           printf("\n")
         }

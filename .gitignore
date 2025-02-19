@@ -10,3 +10,4 @@ lib
 /.bloop/
 /.metals/
 /out/
+.vscode/
